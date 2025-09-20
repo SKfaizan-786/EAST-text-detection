@@ -75,9 +75,9 @@ class EASTDataset(Dataset):
 
         # horizontal flip (and adjust geo x offsets)
         if random.random() < 0.5:
-            img = img[:, ::-1, :]
-            score = score[:, ::-1]
-            geo = geo[:, ::-1, :]
+            img = img[:, ::-1, :].copy()
+            score = score[:, ::-1].copy()
+            geo = geo[:, ::-1, :].copy()
             # negate x-offset channels (dx) after horizontal flip: channels 0,2,4,6
             geo[..., 0::2] = -geo[..., 0::2]
 
