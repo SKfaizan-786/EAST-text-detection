@@ -1,8 +1,7 @@
 import os
 import torch
 import torch.optim as optim
-from torch.utils.data import DataLoader
-from torchvision import transforms
+from torch.utils.data import DataLoader, random_split
 from tqdm import tqdm
 
 from src.dataset import EASTDataset
@@ -21,16 +20,34 @@ def train(
     os.makedirs(save_dir, exist_ok=True)
 
     # ----- Dataset & Loader -----
-    train_dataset = EASTDataset(
+    # Create full dataset
+    full_dataset = EASTDataset(
         img_dir=img_dir,
         map_dir=map_dir,
         size=512,
         training=True
     )
+    
+    # Split into train / validation (90% / 10%)
+    val_ratio = 0.1
+    val_size = int(len(full_dataset) * val_ratio)
+    train_size = len(full_dataset) - val_size
+    train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size])
+
+    print(f"Train size: {train_size},  Val size: {val_size}")
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
         shuffle=True,
+        num_workers=2,
+        pin_memory=True
+    )
+
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
         num_workers=2,
         pin_memory=True
     )
@@ -41,10 +58,16 @@ def train(
     optimizer = optim.Adam(model.parameters(), lr=lr)
 
     # Learning rate schedule similar to paper
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=27300 // len(train_loader), gamma=0.1)
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=27300 // (train_size // batch_size), gamma=0.1)
 
-    print(f"Training on {len(train_dataset)} images for {epochs} epochs")
+    # ----- Early stopping variables -----
+    best_val = float("inf")
+    patience = 10
+    trigger = 0
+
+    print(f"Training on {train_size} images and validating on {val_size} images for {epochs} epochs")
     for epoch in range(1, epochs + 1):
+        # ----- Training Loop -----
         model.train()
         epoch_loss = 0.0
 
@@ -70,15 +93,41 @@ def train(
 
         scheduler.step()
         avg_loss = epoch_loss / len(train_loader)
-        print(f"Epoch {epoch} avg loss: {avg_loss:.4f}")
 
-        # Save checkpoint
-        ckpt_path = os.path.join(save_dir, f"east_epoch_{epoch}.pth")
-        torch.save({
-            "epoch": epoch,
-            "model_state": model.state_dict(),
-            "optimizer_state": optimizer.state_dict(),
-        }, ckpt_path)
+        # ----- Validation Loop -----
+        model.eval()
+        val_loss = 0.0
+        with torch.no_grad():
+            for imgs, scores, geos, nmaps in val_loader:
+                imgs, scores, geos, nmaps = (
+                    imgs.to(device),
+                    scores.to(device),
+                    geos.to(device),
+                    nmaps.to(device),
+                )
+                pred_score, pred_geo = model(imgs)
+                total_loss, _, _ = criterion(pred_score, pred_geo, scores, geos, nmaps)
+                val_loss += total_loss.item()
+        
+        val_loss /= len(val_loader)
+        print(f"Epoch {epoch} | train loss {avg_loss:.4f} | val loss {val_loss:.4f}")
+
+        # ----- Early Stopping check -----
+        if val_loss < best_val - 1e-4:
+            best_val = val_loss
+            trigger = 0
+            # Save the best checkpoint
+            torch.save({
+                "epoch": epoch,
+                "model_state": model.state_dict(),
+                "optimizer_state": optimizer.state_dict(),
+            }, os.path.join(save_dir, "east_best.pth"))
+            print(f"✅ New best model saved with val loss: {best_val:.4f}")
+        else:
+            trigger += 1
+            if trigger >= patience:
+                print(f"🛑 Early stopping at epoch {epoch}. No improvement for {patience} epochs.")
+                break
 
 if __name__ == "__main__":
     train()
