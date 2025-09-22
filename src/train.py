@@ -56,7 +56,7 @@ def train(
 
     # 🔑 Scheduler: reduce LR when val loss plateaus
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', factor=0.5, patience=3, verbose=True
+        optimizer, mode='min', factor=0.5, patience=3
     )
 
     # ----- Early Stopping -----
@@ -122,7 +122,11 @@ def train(
         print(f"Epoch {epoch} | train {avg_train_loss:.4f} | val {val_loss:.4f}")
 
         # 🔑 Step the scheduler with validation loss
+        old_lr = optimizer.param_groups[0]['lr']
         scheduler.step(val_loss)
+        new_lr = optimizer.param_groups[0]['lr']
+        if new_lr != old_lr:
+            print(f"LR reduced from {old_lr:.6f} to {new_lr:.6f}")
 
         # ===== Early Stopping =====
         if val_loss < best_val - 1e-4:
